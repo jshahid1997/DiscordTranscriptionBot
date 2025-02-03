@@ -1,3 +1,7 @@
 ._*
 .env
 .venv
+node_modules
+venv
+recordings/
+transcriptions/
