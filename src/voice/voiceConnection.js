@@ -36,18 +36,43 @@ async function setupVoiceConnection(channel, textChannel) {
     connection.subscribe(audioPlayer);
 
     const userStreams = new Map();
+    let currentSpeaker = null;
+    let speakingTimeout = null;
     
     connection.receiver.speaking.on('start', (userId) => {
       const user = channel.guild.members.cache.get(userId);
       if (!user) return;
 
+      // If this user is already speaking, don't create a new stream
+      if (currentSpeaker === userId && userStreams.has(userId)) {
+        // Clear the speaking timeout since they're still talking
+        if (speakingTimeout) {
+          clearTimeout(speakingTimeout);
+          speakingTimeout = null;
+        }
+        return;
+      }
+
       console.log(`${user.displayName} started speaking`);
+
+      // If there was a previous speaker, end their recording
+      if (currentSpeaker && currentSpeaker !== userId) {
+        const prevStreamData = userStreams.get(currentSpeaker);
+        if (prevStreamData) {
+          prevStreamData.handleEnd();
+        }
+      }
+
+      currentSpeaker = userId;
 
       const audioStream = connection.receiver.subscribe(userId, {
         end: {
           behavior: 'manual',
         },
       });
+
+      // Set max listeners to prevent warning
+      audioStream.setMaxListeners(20);
 
       // Create a buffer to store audio data
       let audioBuffer = Buffer.alloc(0);
@@ -137,6 +162,9 @@ async function setupVoiceConnection(channel, textChannel) {
             streams.decoder.destroy();
             userStreams.delete(userId);
           }
+          if (currentSpeaker === userId) {
+            currentSpeaker = null;
+          }
         }
       };
 
@@ -150,10 +178,19 @@ async function setupVoiceConnection(channel, textChannel) {
 
     connection.receiver.speaking.on('end', (userId) => {
       console.log(`User ${userId} stopped speaking`);
-      const streamData = userStreams.get(userId);
-      if (streamData) {
-        streamData.handleEnd();
+      
+      // Instead of ending immediately, wait for a short period to see if they start speaking again
+      if (speakingTimeout) {
+        clearTimeout(speakingTimeout);
       }
+      
+      speakingTimeout = setTimeout(() => {
+        const streamData = userStreams.get(userId);
+        if (streamData) {
+          streamData.handleEnd();
+        }
+        speakingTimeout = null;
+      }, 2000); // Wait 1 second before ending the recording
     });
 
     activeConnections.set(channel.guild.id, {
